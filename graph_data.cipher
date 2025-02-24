@@ -1,0 +1,125 @@
+:param {
+  file_path_root: 'file:///',
+  file_patients: 'patients.csv',
+  file_conditions: 'conditions.csv',
+  file_encounters: 'encounters.csv',
+  file_medications: 'medications.csv',
+  idsToSkip: []
+};
+
+// Create node uniqueness constraints
+CREATE CONSTRAINT `ID_Patient_uniq` IF NOT EXISTS
+FOR (n:Patient)
+REQUIRE (n.ID) IS UNIQUE;
+
+CREATE CONSTRAINT `CODE_Condition_uniq` IF NOT EXISTS
+FOR (n:Condition)
+REQUIRE (n.CODE) IS UNIQUE;
+
+CREATE CONSTRAINT `ID_Encounter_uniq` IF NOT EXISTS
+FOR (n:Encounter)
+REQUIRE (n.ID) IS UNIQUE;
+
+CREATE CONSTRAINT `CODE_Medication_uniq` IF NOT EXISTS
+FOR (n:Medication)
+REQUIRE (n.CODE) IS UNIQUE;
+
+CREATE CONSTRAINT `ID_Outcome_uniq` IF NOT EXISTS
+FOR (n:Outcome)
+REQUIRE (n.ID) IS UNIQUE;
+
+// Load patients
+:auto LOAD CSV WITH HEADERS FROM ($file_path_root + $file_patients) AS row
+WITH row
+WHERE NOT row.`Id` IN $idsToSkip AND NOT row.`Id` IS NULL
+CALL {
+  WITH row
+  MERGE (p:Patient {ID: row.`Id`})
+  SET p.DOB = row.`BIRTHDATE`,
+      p.DOD = row.`DEATHDATE`,
+      p.GENDER = row.`GENDER`,
+      p.FIRST = row.`FIRST`,
+      p.LAST = row.`LAST`,
+      p.HEALTHCARE_EXPENSES = toFloat(trim(row.`HEALTHCARE_EXPENSES`))
+} IN TRANSACTIONS OF 10000 ROWS;
+
+// Load encounters
+:auto LOAD CSV WITH HEADERS FROM ($file_path_root + $file_encounters) AS row
+WITH row
+WHERE NOT row.`Id` IN $idsToSkip AND NOT row.`Id` IS NULL
+CALL {
+  WITH row
+  MERGE (e:Encounter {ID: row.`Id`})
+  SET e.PROVIDER = row.`PROVIDER`,
+      e.DESCRIPTION = row.`DESCRIPTION`,
+      e.BASE_ENCOUNTER_COST = toFloat(trim(row.`BASE_ENCOUNTER_COST`)),
+      e.TOTAL_CLAIM_COST = toFloat(trim(row.`TOTAL_CLAIM_COST`)),
+      e.PAYER_COVERAGE = toFloat(trim(row.`PAYER_COVERAGE`)),
+      e.REASONDESCRIPTION = row.`REASONDESCRIPTION`,
+      e.START = datetime(row.`START`)
+} IN TRANSACTIONS OF 10000 ROWS;
+
+// Load conditions
+:auto LOAD CSV WITH HEADERS FROM ($file_path_root + $file_conditions) AS row
+WITH row
+WHERE NOT row.`CODE` IN $idsToSkip AND NOT row.`CODE` IS NULL
+CALL {
+  WITH row
+  MERGE (c:Condition {CODE: row.`CODE`})
+  SET c.DESCRIPTION = row.`DESCRIPTION`,
+      c.START = datetime(row.`START`)
+} IN TRANSACTIONS OF 10000 ROWS;
+
+// Load medications
+:auto LOAD CSV WITH HEADERS FROM ($file_path_root + $file_medications) AS row
+WITH row
+WHERE NOT row.`CODE` IN $idsToSkip AND NOT toInteger(trim(row.`CODE`)) IS NULL
+CALL {
+  WITH row
+  MERGE (m:Medication {CODE: toInteger(trim(row.`CODE`))})
+  SET m.DESCRIPTION = row.`DESCRIPTION`,
+      m.BASE_COST = toFloat(trim(row.`BASE_COST`)),
+      m.TOTALCOST = toFloat(trim(row.`TOTALCOST`))
+} IN TRANSACTIONS OF 10000 ROWS;
+
+
+// Load relationships in batches
+// Patients → Conditions
+:auto LOAD CSV WITH HEADERS FROM ($file_path_root + $file_conditions) AS row
+WITH row
+CALL {
+  WITH row
+  MATCH (p:Patient {ID: row.`PATIENT`})
+  MATCH (c:Condition {CODE: row.`CODE`})
+  MERGE (p)-[:Has]->(c)
+} IN TRANSACTIONS OF 10000 ROWS;
+
+// Patients → Encounters
+:auto LOAD CSV WITH HEADERS FROM ($file_path_root + $file_encounters) AS row
+WITH row
+CALL {
+  WITH row
+  MATCH (p:Patient {ID: row.`PATIENT`})
+  MATCH (e:Encounter {ID: row.`Id`})
+  MERGE (p)-[:Had]->(e)
+} IN TRANSACTIONS OF 10000 ROWS;
+
+// Encounters → Conditions
+:auto LOAD CSV WITH HEADERS FROM ($file_path_root + $file_encounters) AS row
+WITH row
+CALL {
+  WITH row
+  MATCH (e:Encounter {ID: row.`Id`})
+  MATCH (c:Condition {CODE: row.`REASONDESCRIPTION`})
+  MERGE (e)-[:Requires]->(c)
+} IN TRANSACTIONS OF 10000 ROWS;
+
+// Patients → Medications
+:auto LOAD CSV WITH HEADERS FROM ($file_path_root + $file_medications) AS row
+WITH row
+CALL {
+  WITH row
+  MATCH (p:Patient {ID: row.`PATIENT`})
+  MATCH (m:Medication {CODE: toInteger(trim(row.`CODE`))})
+  MERGE (p)-[:Treated_With]->(m)
+} IN TRANSACTIONS OF 10000 ROWS;
